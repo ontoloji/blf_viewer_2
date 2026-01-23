@@ -356,7 +356,8 @@ class MainWindow(QMainWindow):
         # Add cursor at middle of view range
         view_range = self.graph_panel.get_view_range()
         if view_range:
-            x_min, x_max = view_range
+            x_min = view_range['x_min']
+            x_max = view_range['x_max']
             position = (x_min + x_max) / 4
         else:
             position = 0
@@ -377,7 +378,8 @@ class MainWindow(QMainWindow):
         # Add cursor at middle of view range
         view_range = self.graph_panel.get_view_range()
         if view_range:
-            x_min, x_max = view_range
+            x_min = view_range['x_min']
+            x_max = view_range['x_max']
             position = (x_min + x_max) * 3 / 4
         else:
             position = 0
@@ -467,7 +469,8 @@ class MainWindow(QMainWindow):
             try:
                 # Get view range
                 view_range = self.graph_panel.get_view_range()
-                x_min, x_max = view_range if view_range else (0, 0)
+                x_min = view_range.get('x_min', 0)
+                x_max = view_range.get('x_max', 0)
                 
                 # Get cursor positions
                 cursor_positions = self.cursor_manager.get_cursor_positions()
