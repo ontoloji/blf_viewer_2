@@ -64,7 +64,8 @@ class Workspace:
         window_geometry: Dict[str, int],
         graph_count: int = 1,
         dark_mode: bool = False,
-        cursor_positions: Optional[Dict[int, float]] = None
+        cursor_positions: Optional[Dict[int, float]] = None,
+        overlay_mode: bool = False
     ) -> Dict[str, Any]:
         """
         Create a workspace data dictionary.
@@ -78,6 +79,7 @@ class Workspace:
             graph_count: Number of graphs displayed
             dark_mode: Whether dark mode is enabled
             cursor_positions: Dictionary of cursor positions
+            overlay_mode: Whether selected signals are overlaid on one graph
             
         Returns:
             Workspace data dictionary
@@ -89,7 +91,8 @@ class Workspace:
             'view_range': view_range,
             'window_geometry': window_geometry,
             'graph_count': graph_count,
-            'dark_mode': dark_mode
+            'dark_mode': dark_mode,
+            'overlay_mode': overlay_mode
         }
         
         if cursor_positions:

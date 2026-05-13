@@ -22,9 +22,9 @@ class GraphPanel(QWidget):
         ]
         self.current_graph_count = 1  # Default to 1 graph
         self.plot_widgets: List[Optional[pg.PlotWidget]] = []
-        self.plot_items: List[Optional[pg.PlotDataItem]] = []
-        self.signal_info: List[Optional[Dict]] = []
-        self.signal_data: List[Optional[Dict]] = []  # Store signal data for re-plotting
+        self.plot_items: List[List[pg.PlotDataItem]] = []
+        self.signal_info: List[List[Dict]] = []
+        self.signal_data: List[List[Dict]] = []  # Store signal data for re-plotting
         self.splitter = None
         self.is_dark_mode = False
         self.init_ui()
@@ -65,9 +65,9 @@ class GraphPanel(QWidget):
         for i in range(count):
             plot_widget = self._create_single_plot(i)
             self.plot_widgets.append(plot_widget)
-            self.plot_items.append(None)
-            self.signal_info.append(None)
-            self.signal_data.append(None)
+            self.plot_items.append([])
+            self.signal_info.append([])
+            self.signal_data.append([])
             self.splitter.addWidget(plot_widget)
     
     def _create_single_plot(self, index: int) -> pg.PlotWidget:
@@ -124,9 +124,14 @@ class GraphPanel(QWidget):
         for i in range(len(self.signal_data)):
             if self.signal_data[i]:
                 stored_data.append({
-                    'time': self.signal_data[i]['time'],
-                    'value': self.signal_data[i]['value'],
-                    'info': self.signal_info[i]
+                    'items': [
+                        {
+                            'time': item['time'],
+                            'value': item['value'],
+                            'info': info
+                        }
+                        for item, info in zip(self.signal_data[i], self.signal_info[i])
+                    ]
                 })
         
         # Recreate graphs
@@ -135,7 +140,14 @@ class GraphPanel(QWidget):
         # Restore signal data to new graphs
         for i, data in enumerate(stored_data):
             if i < count:
-                self.plot_signal(i, data['time'], data['value'], data['info'])
+                for item_index, item in enumerate(data['items']):
+                    self.plot_signal(
+                        i,
+                        item['time'],
+                        item['value'],
+                        item['info'],
+                        append=item_index > 0
+                    )
     
     def set_theme(self, is_dark: bool):
         """
@@ -163,7 +175,8 @@ class GraphPanel(QWidget):
         index: int,
         time_data: np.ndarray,
         value_data: np.ndarray,
-        signal_info: Dict[str, str]
+        signal_info: Dict[str, str],
+        append: bool = False
     ):
         """
         Plot a signal on a specific graph.
@@ -179,12 +192,16 @@ class GraphPanel(QWidget):
         
         plot_widget = self.plot_widgets[index]
         
-        # Clear previous plot
-        if index < len(self.plot_items) and self.plot_items[index]:
-            plot_widget.removeItem(self.plot_items[index])
+        if index >= len(self.plot_items):
+            return
+
+        # Clear previous plot unless we are overlaying on the same graph
+        if not append:
+            self.clear_graph(index)
         
         # Create new plot
-        color = self.colors[index % len(self.colors)]
+        color_index = len(self.signal_info[index])
+        color = self.colors[color_index % len(self.colors)]
         pen = pg.mkPen(color=color, width=2)
         
         label = f"{signal_info['message']}.{signal_info['signal']}"
@@ -199,19 +216,21 @@ class GraphPanel(QWidget):
         )
         
         # Store plot item and signal info
-        if index < len(self.plot_items):
-            self.plot_items[index] = plot_item
-            self.signal_info[index] = signal_info
-            self.signal_data[index] = {
+        self.plot_items[index].append(plot_item)
+        self.signal_info[index].append(signal_info)
+        self.signal_data[index].append({
                 'time': time_data,
                 'value': value_data
-            }
+        })
         
         # Update axis label
         fg_color = '#ffffff' if self.is_dark_mode else '#000000'
-        y_label = signal_info['signal']
-        if signal_info['unit']:
-            y_label += f" ({signal_info['unit']})"
+        if len(self.signal_info[index]) > 1:
+            y_label = 'Value'
+        else:
+            y_label = signal_info['signal']
+            if signal_info['unit']:
+                y_label += f" ({signal_info['unit']})"
         plot_widget.setLabel('left', y_label, color=fg_color)
     
     def clear_graph(self, index: int):
@@ -226,14 +245,15 @@ class GraphPanel(QWidget):
         
         plot_widget = self.plot_widgets[index]
         
-        if index < len(self.plot_items) and self.plot_items[index]:
-            plot_widget.removeItem(self.plot_items[index])
-            self.plot_items[index] = None
+        if index < len(self.plot_items):
+            for item in self.plot_items[index]:
+                plot_widget.removeItem(item)
+            self.plot_items[index] = []
         
         if index < len(self.signal_info):
-            self.signal_info[index] = None
+            self.signal_info[index] = []
         if index < len(self.signal_data):
-            self.signal_data[index] = None
+            self.signal_data[index] = []
         
         fg_color = '#ffffff' if self.is_dark_mode else '#000000'
         plot_widget.setLabel('left', 'Value', color=fg_color)
@@ -320,12 +340,28 @@ class GraphPanel(QWidget):
             Dictionary with signal data for statistics calculations
         """
         result = {}
-        for i, info in enumerate(self.signal_info):
-            if info and i < len(self.signal_data) and self.signal_data[i]:
+        for graph_index, graph_signals in enumerate(self.signal_info):
+            if graph_index >= len(self.signal_data):
+                continue
+
+            for signal_index, info in enumerate(graph_signals):
+                if signal_index >= len(self.signal_data[graph_index]):
+                    continue
+
+                signal_data = self.signal_data[graph_index][signal_index]
+                if not signal_data:
+                    continue
+
                 key = f"{info['message']}.{info['signal']}"
-                result[key] = {
-                    'time': self.signal_data[i]['time'],
-                    'value': self.signal_data[i]['value'],
+                unique_key = key
+                suffix = 2
+                while unique_key in result:
+                    unique_key = f"{key} ({suffix})"
+                    suffix += 1
+
+                result[unique_key] = {
+                    'time': signal_data['time'],
+                    'value': signal_data['value'],
                     'unit': info.get('unit', ''),
                     'message': info['message'],
                     'signal': info['signal']

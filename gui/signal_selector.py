@@ -5,7 +5,7 @@ Left panel for selecting CAN messages and signals.
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QPushButton, QLabel, QMessageBox, QSpinBox, QHBoxLayout
+    QPushButton, QLabel, QMessageBox, QSpinBox, QHBoxLayout, QCheckBox
 )
 from PyQt5.QtCore import pyqtSignal, Qt
 from typing import List, Dict, Any, Optional
@@ -18,6 +18,8 @@ class SignalSelector(QWidget):
     selection_changed = pyqtSignal(list)
     # Signal emitted when graph count changes
     graph_count_changed = pyqtSignal(int)
+    # Signal emitted when overlay mode changes
+    overlay_mode_changed = pyqtSignal(bool)
     
     def __init__(self, max_signals: int = 5):
         super().__init__()
@@ -49,6 +51,13 @@ class SignalSelector(QWidget):
         graph_count_layout.addStretch()
         
         layout.addLayout(graph_count_layout)
+
+        self.overlay_checkbox = QCheckBox("Overlay selected signals on one graph")
+        self.overlay_checkbox.setToolTip(
+            "Useful for comparing signals such as SOC and current on the same graph."
+        )
+        self.overlay_checkbox.toggled.connect(self.on_overlay_mode_changed)
+        layout.addWidget(self.overlay_checkbox)
         
         # Tree widget for messages and signals
         self.tree = QTreeWidget()
@@ -212,6 +221,10 @@ class SignalSelector(QWidget):
             value: New graph count value
         """
         self.graph_count_changed.emit(value)
+
+    def on_overlay_mode_changed(self, enabled: bool):
+        """Handle overlay mode change."""
+        self.overlay_mode_changed.emit(enabled)
     
     def get_graph_count(self) -> int:
         """Get current graph count setting."""
@@ -226,3 +239,11 @@ class SignalSelector(QWidget):
         """
         if 1 <= count <= 10:
             self.graph_count_spinbox.setValue(count)
+
+    def is_overlay_mode_enabled(self) -> bool:
+        """Return whether overlay mode is enabled."""
+        return self.overlay_checkbox.isChecked()
+
+    def set_overlay_mode(self, enabled: bool):
+        """Set overlay mode checkbox state."""
+        self.overlay_checkbox.setChecked(enabled)

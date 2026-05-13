@@ -55,6 +55,7 @@ class MainWindow(QMainWindow):
         self.cursor_manager = None
         self.statistics_widget = None
         self.statistics_dock = None
+        self.overlay_mode_enabled = False
         
         # Initialize UI
         self.init_ui()
@@ -82,6 +83,7 @@ class MainWindow(QMainWindow):
         self.signal_selector = SignalSelector(max_signals=5)
         self.signal_selector.selection_changed.connect(self.on_signal_selection_changed)
         self.signal_selector.graph_count_changed.connect(self.on_graph_count_changed)
+        self.signal_selector.overlay_mode_changed.connect(self.on_overlay_mode_changed)
         splitter.addWidget(self.signal_selector)
         
         # Right panel: Graph Panel
@@ -305,32 +307,63 @@ class MainWindow(QMainWindow):
         # Clear all graphs first
         self.graph_panel.clear_all()
         
-        # Plot each selected signal
-        for idx, signal_info in enumerate(selected_signals):
-            if idx >= self.graph_panel.current_graph_count:
-                break
-            
-            try:
-                # Process signal
-                time_data, value_data = self.signal_processor.process_signal(
-                    signal_info['message'],
-                    signal_info['signal']
-                )
+        if self.overlay_mode_enabled:
+            for idx, signal_info in enumerate(selected_signals):
+                try:
+                    time_data, value_data = self.signal_processor.process_signal(
+                        signal_info['message'],
+                        signal_info['signal']
+                    )
+
+                    self.graph_panel.plot_signal(
+                        0,
+                        time_data,
+                        value_data,
+                        signal_info,
+                        append=idx > 0
+                    )
+
+                except Exception as e:
+                    QMessageBox.warning(
+                        self,
+                        "Signal Processing Error",
+                        f"Failed to process signal {signal_info['signal']}:\n{str(e)}"
+                    )
+        else:
+            # Plot each selected signal
+            for idx, signal_info in enumerate(selected_signals):
+                if idx >= self.graph_panel.current_graph_count:
+                    break
                 
-                # Plot signal
-                self.graph_panel.plot_signal(idx, time_data, value_data, signal_info)
-                
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Signal Processing Error",
-                    f"Failed to process signal {signal_info['signal']}:\n{str(e)}"
-                )
+                try:
+                    # Process signal
+                    time_data, value_data = self.signal_processor.process_signal(
+                        signal_info['message'],
+                        signal_info['signal']
+                    )
+                    
+                    # Plot signal
+                    self.graph_panel.plot_signal(idx, time_data, value_data, signal_info)
+                    
+                except Exception as e:
+                    QMessageBox.warning(
+                        self,
+                        "Signal Processing Error",
+                        f"Failed to process signal {signal_info['signal']}:\n{str(e)}"
+                    )
         
         # Update status
-        self.statusBar().showMessage(
-            f"Plotting {len(selected_signals)} signal(s)"
-        )
+        if self.overlay_mode_enabled:
+            self.statusBar().showMessage(
+                f"Plotting {len(selected_signals)} signal(s) on one combined graph"
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Plotting {len(selected_signals)} signal(s)"
+            )
+
+        # Keep cursor statistics in sync with newly plotted signals
+        self.update_statistics()
     
     def on_graph_count_changed(self, count):
         """Handle graph count changes."""
@@ -342,6 +375,11 @@ class MainWindow(QMainWindow):
         # Re-plot selected signals
         selected_signals = self.signal_selector.get_selected_signals()
         self.on_signal_selection_changed(selected_signals)
+
+    def on_overlay_mode_changed(self, enabled):
+        """Handle overlay mode toggle."""
+        self.overlay_mode_enabled = enabled
+        self.on_signal_selection_changed(self.signal_selector.get_selected_signals())
     
     def add_cursor_1(self):
         """Add cursor 1 (green)."""
@@ -401,7 +439,7 @@ class MainWindow(QMainWindow):
         """Update statistics display."""
         cursor_positions = self.cursor_manager.get_cursor_positions()
         
-        if len(cursor_positions) == 2:
+        if len(cursor_positions) >= 1:
             signal_data = self.graph_panel.get_signal_data()
             self.statistics_widget.update_statistics(cursor_positions, signal_data)
     
@@ -409,7 +447,7 @@ class MainWindow(QMainWindow):
         """Show/hide statistics dock based on cursor count."""
         cursor_positions = self.cursor_manager.get_cursor_positions()
         
-        if len(cursor_positions) == 2:
+        if len(cursor_positions) >= 1:
             self.statistics_dock.setVisible(True)
             self.update_statistics()
         else:
@@ -486,7 +524,8 @@ class MainWindow(QMainWindow):
                     window_height=self.height(),
                     graph_count=self.signal_selector.get_graph_count(),
                     dark_mode=self.dark_mode_action.isChecked(),
-                    cursor_positions=cursor_positions
+                    cursor_positions=cursor_positions,
+                    overlay_mode=self.signal_selector.is_overlay_mode_enabled()
                 )
                 
                 # Save workspace
@@ -535,6 +574,10 @@ class MainWindow(QMainWindow):
                 # Restore graph count
                 if 'graph_count' in workspace_data:
                     self.signal_selector.set_graph_count(workspace_data['graph_count'])
+
+                # Restore overlay mode
+                if 'overlay_mode' in workspace_data:
+                    self.signal_selector.set_overlay_mode(workspace_data['overlay_mode'])
                 
                 # Restore dark mode
                 if 'dark_mode' in workspace_data:
