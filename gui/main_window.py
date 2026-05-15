@@ -56,6 +56,8 @@ class MainWindow(QMainWindow):
         self.statistics_widget = None
         self.statistics_dock = None
         self.overlay_mode_enabled = False
+        self.xy_mode_enabled = False
+        self.xy_axis_selection = {'x': None, 'y': None}
         
         # Initialize UI
         self.init_ui()
@@ -84,6 +86,8 @@ class MainWindow(QMainWindow):
         self.signal_selector.selection_changed.connect(self.on_signal_selection_changed)
         self.signal_selector.graph_count_changed.connect(self.on_graph_count_changed)
         self.signal_selector.overlay_mode_changed.connect(self.on_overlay_mode_changed)
+        self.signal_selector.xy_mode_changed.connect(self.on_xy_mode_changed)
+        self.signal_selector.xy_axes_changed.connect(self.on_xy_axes_changed)
         splitter.addWidget(self.signal_selector)
         
         # Right panel: Graph Panel
@@ -304,6 +308,10 @@ class MainWindow(QMainWindow):
         if not self.signal_processor:
             return
         
+        if self.xy_mode_enabled:
+            self.plot_xy_relation()
+            return
+
         # Clear all graphs first
         self.graph_panel.clear_all()
         
@@ -380,6 +388,93 @@ class MainWindow(QMainWindow):
         """Handle overlay mode toggle."""
         self.overlay_mode_enabled = enabled
         self.on_signal_selection_changed(self.signal_selector.get_selected_signals())
+
+    def on_xy_mode_changed(self, enabled):
+        """Handle XY mode toggle."""
+        self.xy_mode_enabled = enabled
+        if enabled:
+            self.overlay_mode_enabled = False
+            self.graph_panel.set_graph_count(1)
+        else:
+            self.graph_panel.set_graph_count(self.signal_selector.get_graph_count())
+
+        self.on_signal_selection_changed(self.signal_selector.get_selected_signals())
+
+    def on_xy_axes_changed(self, axis_selection):
+        """Handle X/Y axis signal mapping updates."""
+        self.xy_axis_selection = axis_selection or {'x': None, 'y': None}
+        if self.xy_mode_enabled:
+            self.plot_xy_relation()
+
+    def plot_xy_relation(self):
+        """Create and render X-Y relation using synchronized signal data."""
+        self.graph_panel.clear_all()
+
+        if not self.signal_processor:
+            return
+
+        x_signal = self.xy_axis_selection.get('x') if self.xy_axis_selection else None
+        y_signal = self.xy_axis_selection.get('y') if self.xy_axis_selection else None
+
+        if not x_signal or not y_signal:
+            self.statusBar().showMessage("X-Y mode: Select both X and Y axis signals")
+            self.update_statistics()
+            return
+
+        if x_signal['message'] == y_signal['message'] and x_signal['signal'] == y_signal['signal']:
+            self.statusBar().showMessage("X-Y mode: X and Y axis signals must be different")
+            self.update_statistics()
+            return
+
+        cursor_positions = self.cursor_manager.get_cursor_positions()
+        time_range = None
+        if len(cursor_positions) == 2:
+            positions = sorted(cursor_positions.values())
+            time_range = (positions[0], positions[1])
+
+        try:
+            xy_data = self.signal_processor.create_xy_relation(
+                x_message=x_signal['message'],
+                x_signal=x_signal['signal'],
+                y_message=y_signal['message'],
+                y_signal=y_signal['signal'],
+                time_range=time_range,
+                interpolation='linear',
+                base='higher_rate',
+                max_points=5000
+            )
+
+            if not xy_data or len(xy_data['x']) == 0:
+                self.statusBar().showMessage("X-Y mode: No overlapping data found for selected signals")
+                self.update_statistics()
+                return
+
+            self.graph_panel.plot_xy_relation(
+                0,
+                xy_data['x'],
+                xy_data['y'],
+                x_signal,
+                y_signal
+            )
+
+            point_count = len(xy_data['x'])
+            if time_range is None:
+                self.statusBar().showMessage(
+                    f"X-Y mode: {y_signal['signal']} vs {x_signal['signal']} ({point_count} points)"
+                )
+            else:
+                self.statusBar().showMessage(
+                    f"X-Y mode: {y_signal['signal']} vs {x_signal['signal']} ({point_count} points, cursor range)"
+                )
+
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "X-Y Plot Error",
+                f"Failed to create X-Y relation:\n{str(e)}"
+            )
+
+        self.update_statistics()
     
     def add_cursor_1(self):
         """Add cursor 1 (green)."""

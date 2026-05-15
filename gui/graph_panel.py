@@ -25,6 +25,7 @@ class GraphPanel(QWidget):
         self.plot_items: List[List[pg.PlotDataItem]] = []
         self.signal_info: List[List[Dict]] = []
         self.signal_data: List[List[Dict]] = []  # Store signal data for re-plotting
+        self.secondary_viewboxes: List[Optional[pg.ViewBox]] = []  # for right-side axes
         self.splitter = None
         self.is_dark_mode = False
         self.init_ui()
@@ -60,6 +61,7 @@ class GraphPanel(QWidget):
         self.plot_items.clear()
         self.signal_info.clear()
         self.signal_data.clear()
+        self.secondary_viewboxes.clear()
         
         # Create new graphs
         for i in range(count):
@@ -68,6 +70,7 @@ class GraphPanel(QWidget):
             self.plot_items.append([])
             self.signal_info.append([])
             self.signal_data.append([])
+            self.secondary_viewboxes.append(None)
             self.splitter.addWidget(plot_widget)
     
     def _create_single_plot(self, index: int) -> pg.PlotWidget:
@@ -169,6 +172,52 @@ class GraphPanel(QWidget):
                 plot_widget.getAxis('bottom').setPen(fg_color)
                 plot_widget.getAxis('left').setTextPen(fg_color)
                 plot_widget.getAxis('bottom').setTextPen(fg_color)
+                # update right axis if present
+                try:
+                    plot_widget.getAxis('right').setPen(fg_color)
+                    plot_widget.getAxis('right').setTextPen(fg_color)
+                except Exception:
+                    pass
+
+    def _ensure_right_axis(self, index: int) -> Optional[pg.ViewBox]:
+        """
+        Ensure a right-side ViewBox and axis exist for the specified plot index.
+        Returns the secondary ViewBox.
+        """
+        if index >= len(self.plot_widgets):
+            return None
+
+        if self.secondary_viewboxes[index] is not None:
+            return self.secondary_viewboxes[index]
+
+        plot_widget = self.plot_widgets[index]
+        plot_item = plot_widget.getPlotItem()
+
+        # create secondary viewbox and link it to the right axis
+        vb = pg.ViewBox()
+        plot_item.scene().addItem(vb)
+        plot_item.showAxis('right')
+        plot_item.getAxis('right').linkToView(vb)
+        plot_item.getAxis('right').setZValue(100)
+
+        # keep the X range linked to the main plot widget's viewbox
+        vb.setXLink(plot_item.vb)
+
+        # update geometry when main viewbox is resized
+        def update_vb():
+            try:
+                vb.setGeometry(plot_item.vb.sceneBoundingRect())
+                vb.linkedViewChanged(plot_item.vb, plot_item.vb.XAxis)
+            except Exception:
+                pass
+
+        plot_item.vb.sigResized.connect(update_vb)
+        # perform initial update to position the right viewbox
+        update_vb()
+
+        # store secondary viewbox
+        self.secondary_viewboxes[index] = vb
+        return vb
     
     def plot_signal(
         self,
@@ -176,7 +225,8 @@ class GraphPanel(QWidget):
         time_data: np.ndarray,
         value_data: np.ndarray,
         signal_info: Dict[str, str],
-        append: bool = False
+        append: bool = False,
+        y_axis: Optional[str] = None
     ):
         """
         Plot a signal on a specific graph.
@@ -208,12 +258,34 @@ class GraphPanel(QWidget):
         if signal_info['unit']:
             label += f" ({signal_info['unit']})"
         
-        plot_item = plot_widget.plot(
-            time_data,
-            value_data,
-            pen=pen,
-            name=label
-        )
+        # Decide target axis: if unspecified and overlaying a second signal, use right axis
+        target_axis = y_axis
+        if target_axis is None and append and len(self.signal_info[index]) == 1:
+            target_axis = 'right'
+        if target_axis not in ('left', 'right'):
+            target_axis = 'left'
+
+        if target_axis == 'left':
+            plot_item = plot_widget.plot(
+                time_data,
+                value_data,
+                pen=pen,
+                name=label
+            )
+        else:
+            vb = self._ensure_right_axis(index)
+            if vb is None:
+                # fallback to left if right axis could not be created
+                plot_item = plot_widget.plot(
+                    time_data,
+                    value_data,
+                    pen=pen,
+                    name=label
+                )
+            else:
+                curve = pg.PlotDataItem(time_data, value_data, pen=pen, name=label)
+                vb.addItem(curve)
+                plot_item = curve
         
         # Store plot item and signal info
         self.plot_items[index].append(plot_item)
@@ -225,13 +297,121 @@ class GraphPanel(QWidget):
         
         # Update axis label
         fg_color = '#ffffff' if self.is_dark_mode else '#000000'
+        plot_widget.setLabel('bottom', 'Time', units='s', color=fg_color)
         if len(self.signal_info[index]) > 1:
+            # If multiple signals, keep generic left label; right axis will show its own label
             y_label = 'Value'
         else:
             y_label = signal_info['signal']
             if signal_info['unit']:
                 y_label += f" ({signal_info['unit']})"
         plot_widget.setLabel('left', y_label, color=fg_color)
+        # set right axis label if the last plotted item went to right
+        if target_axis == 'right':
+            try:
+                right_label = signal_info['signal']
+                if signal_info.get('unit'):
+                    right_label += f" ({signal_info['unit']})"
+                plot_widget.setLabel('right', right_label, color=fg_color)
+            except Exception:
+                pass
+
+    def set_axis_range(self, index: int, side: str, vmin: float, vmax: float):
+        """
+        Set Y-axis range for given graph and side ('left' or 'right').
+        """
+        if index >= len(self.plot_widgets):
+            return
+        plot_widget = self.plot_widgets[index]
+        if side == 'left':
+            plot_widget.setYRange(vmin, vmax, padding=0)
+        elif side == 'right':
+            vb = None
+            if index < len(self.secondary_viewboxes):
+                vb = self.secondary_viewboxes[index]
+            if vb is not None:
+                vb.setYRange(vmin, vmax, padding=0)
+
+    def enable_axis_autorange(self, index: int, side: str, enable: bool = True):
+        """
+        Enable or disable auto-range for the specified Y axis.
+        """
+        if index >= len(self.plot_widgets):
+            return
+        plot_widget = self.plot_widgets[index]
+        if side == 'left':
+            plot_widget.enableAutoRange(axis='y', enable=enable)
+        elif side == 'right':
+            vb = None
+            if index < len(self.secondary_viewboxes):
+                vb = self.secondary_viewboxes[index]
+            if vb is not None:
+                if enable:
+                    vb.enableAutoRange(axis='y', enable=True)
+                else:
+                    vb.enableAutoRange(axis='y', enable=False)
+
+    def plot_xy_relation(
+        self,
+        index: int,
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        x_info: Dict[str, str],
+        y_info: Dict[str, str],
+        append: bool = False
+    ):
+        """Plot a synchronized X-Y relation on a specific graph."""
+        if index >= len(self.plot_widgets):
+            return
+
+        plot_widget = self.plot_widgets[index]
+        if index >= len(self.plot_items):
+            return
+
+        if not append:
+            self.clear_graph(index)
+
+        color_index = len(self.signal_info[index])
+        color = self.colors[color_index % len(self.colors)]
+        pen = pg.mkPen(color=color, width=2)
+
+        x_name = f"{x_info['message']}.{x_info['signal']}"
+        y_name = f"{y_info['message']}.{y_info['signal']}"
+        label = f"{y_name} vs {x_name}"
+
+        plot_item = plot_widget.plot(
+            x_data,
+            y_data,
+            pen=pen,
+            name=label
+        )
+
+        self.plot_items[index].append(plot_item)
+        self.signal_info[index].append({
+            'message': y_info['message'],
+            'signal': y_info['signal'],
+            'unit': y_info.get('unit', ''),
+            'x_signal': x_name,
+            'plot_type': 'xy'
+        })
+        self.signal_data[index].append({
+            'time': x_data,
+            'value': y_data,
+            'x_data': x_data,
+            'y_data': y_data,
+            'plot_type': 'xy'
+        })
+
+        fg_color = '#ffffff' if self.is_dark_mode else '#000000'
+        x_axis = x_info['signal']
+        if x_info.get('unit'):
+            x_axis += f" ({x_info['unit']})"
+        y_axis = y_info['signal']
+        if y_info.get('unit'):
+            y_axis += f" ({y_info['unit']})"
+
+        plot_widget.setLabel('bottom', x_axis, color=fg_color)
+        plot_widget.setLabel('left', y_axis, color=fg_color)
     
     def clear_graph(self, index: int):
         """
@@ -254,9 +434,26 @@ class GraphPanel(QWidget):
             self.signal_info[index] = []
         if index < len(self.signal_data):
             self.signal_data[index] = []
-        
+
+        # remove secondary viewbox/right axis if present
+        if index < len(self.secondary_viewboxes):
+            vb = self.secondary_viewboxes[index]
+            if vb is not None:
+                try:
+                    plot_widget.getPlotItem().scene().removeItem(vb)
+                except Exception:
+                    try:
+                        vb.setParent(None)
+                    except Exception:
+                        pass
+                self.secondary_viewboxes[index] = None
+
         fg_color = '#ffffff' if self.is_dark_mode else '#000000'
         plot_widget.setLabel('left', 'Value', color=fg_color)
+        try:
+            plot_widget.setLabel('right', '', color=fg_color)
+        except Exception:
+            pass
     
     def clear_all(self):
         """Clear all graphs."""

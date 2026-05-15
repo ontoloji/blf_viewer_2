@@ -5,7 +5,7 @@ Left panel for selecting CAN messages and signals.
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QPushButton, QLabel, QMessageBox, QSpinBox, QHBoxLayout, QCheckBox
+    QPushButton, QLabel, QMessageBox, QSpinBox, QHBoxLayout, QCheckBox, QComboBox
 )
 from PyQt5.QtCore import pyqtSignal, Qt
 from typing import List, Dict, Any, Optional
@@ -20,11 +20,16 @@ class SignalSelector(QWidget):
     graph_count_changed = pyqtSignal(int)
     # Signal emitted when overlay mode changes
     overlay_mode_changed = pyqtSignal(bool)
+    # Signal emitted when XY mode changes
+    xy_mode_changed = pyqtSignal(bool)
+    # Signal emitted when XY axis mapping changes
+    xy_axes_changed = pyqtSignal(dict)
     
     def __init__(self, max_signals: int = 5):
         super().__init__()
         self.max_signals = max_signals
         self.selected_signals: List[Dict[str, str]] = []
+        self.xy_mode_enabled = False
         self.init_ui()
     
     def init_ui(self):
@@ -58,6 +63,26 @@ class SignalSelector(QWidget):
         )
         self.overlay_checkbox.toggled.connect(self.on_overlay_mode_changed)
         layout.addWidget(self.overlay_checkbox)
+
+        self.xy_mode_checkbox = QCheckBox("Enable X-Y Relation Plot")
+        self.xy_mode_checkbox.setToolTip(
+            "Plot one signal against another by aligning them on time."
+        )
+        self.xy_mode_checkbox.toggled.connect(self.on_xy_mode_changed)
+        layout.addWidget(self.xy_mode_checkbox)
+
+        xy_axes_layout = QHBoxLayout()
+        self.x_axis_combo = QComboBox()
+        self.y_axis_combo = QComboBox()
+        self.x_axis_combo.setToolTip("Select signal for X axis")
+        self.y_axis_combo.setToolTip("Select signal for Y axis")
+        self.x_axis_combo.currentIndexChanged.connect(self.emit_xy_axes_changed)
+        self.y_axis_combo.currentIndexChanged.connect(self.emit_xy_axes_changed)
+        xy_axes_layout.addWidget(QLabel("X:"))
+        xy_axes_layout.addWidget(self.x_axis_combo)
+        xy_axes_layout.addWidget(QLabel("Y:"))
+        xy_axes_layout.addWidget(self.y_axis_combo)
+        layout.addLayout(xy_axes_layout)
         
         # Tree widget for messages and signals
         self.tree = QTreeWidget()
@@ -75,6 +100,9 @@ class SignalSelector(QWidget):
         layout.addWidget(clear_btn)
         
         self.setLayout(layout)
+        self._refresh_xy_axis_choices()
+        self.x_axis_combo.setEnabled(False)
+        self.y_axis_combo.setEnabled(False)
     
     def load_messages(self, messages: List[Dict[str, Any]], available_ids: List[int]):
         """
@@ -160,6 +188,7 @@ class SignalSelector(QWidget):
             
             # Update label and emit signal
             self.update_selection_label()
+            self._refresh_xy_axis_choices()
             self.selection_changed.emit(self.selected_signals)
     
     def clear_selection(self):
@@ -173,6 +202,7 @@ class SignalSelector(QWidget):
         
         self.selected_signals.clear()
         self.update_selection_label()
+        self._refresh_xy_axis_choices()
         self.selection_changed.emit(self.selected_signals)
     
     def update_selection_label(self):
@@ -225,6 +255,55 @@ class SignalSelector(QWidget):
     def on_overlay_mode_changed(self, enabled: bool):
         """Handle overlay mode change."""
         self.overlay_mode_changed.emit(enabled)
+
+    def on_xy_mode_changed(self, enabled: bool):
+        """Handle XY mode toggle."""
+        self.xy_mode_enabled = enabled
+        self.overlay_checkbox.setEnabled(not enabled)
+        self.graph_count_spinbox.setEnabled(not enabled)
+        self.x_axis_combo.setEnabled(enabled)
+        self.y_axis_combo.setEnabled(enabled)
+        self.xy_mode_changed.emit(enabled)
+        self.emit_xy_axes_changed()
+
+    def _refresh_xy_axis_choices(self):
+        """Refresh available X/Y axis signal choices from selected signals."""
+        previous_x = self.x_axis_combo.currentText()
+        previous_y = self.y_axis_combo.currentText()
+
+        self.x_axis_combo.blockSignals(True)
+        self.y_axis_combo.blockSignals(True)
+
+        self.x_axis_combo.clear()
+        self.y_axis_combo.clear()
+
+        for signal in self.selected_signals:
+            key = f"{signal['message']}.{signal['signal']}"
+            self.x_axis_combo.addItem(key, signal)
+            self.y_axis_combo.addItem(key, signal)
+
+        if self.x_axis_combo.count() > 0:
+            x_index = self.x_axis_combo.findText(previous_x)
+            self.x_axis_combo.setCurrentIndex(x_index if x_index >= 0 else 0)
+
+        if self.y_axis_combo.count() > 0:
+            y_index = self.y_axis_combo.findText(previous_y)
+            default_y = 1 if self.y_axis_combo.count() > 1 else 0
+            self.y_axis_combo.setCurrentIndex(y_index if y_index >= 0 else default_y)
+
+        self.x_axis_combo.blockSignals(False)
+        self.y_axis_combo.blockSignals(False)
+
+        self.emit_xy_axes_changed()
+
+    def emit_xy_axes_changed(self):
+        """Emit selected axis mapping for XY mode consumers."""
+        x_signal = self.x_axis_combo.currentData()
+        y_signal = self.y_axis_combo.currentData()
+        self.xy_axes_changed.emit({
+            'x': x_signal,
+            'y': y_signal
+        })
     
     def get_graph_count(self) -> int:
         """Get current graph count setting."""
@@ -247,3 +326,18 @@ class SignalSelector(QWidget):
     def set_overlay_mode(self, enabled: bool):
         """Set overlay mode checkbox state."""
         self.overlay_checkbox.setChecked(enabled)
+
+    def is_xy_mode_enabled(self) -> bool:
+        """Return whether XY mode is enabled."""
+        return self.xy_mode_checkbox.isChecked()
+
+    def set_xy_mode(self, enabled: bool):
+        """Set XY mode checkbox state."""
+        self.xy_mode_checkbox.setChecked(enabled)
+
+    def get_xy_axis_selection(self) -> Dict[str, Optional[Dict[str, str]]]:
+        """Return selected X and Y signals for XY plotting."""
+        return {
+            'x': self.x_axis_combo.currentData(),
+            'y': self.y_axis_combo.currentData()
+        }
